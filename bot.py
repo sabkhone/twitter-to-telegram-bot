@@ -8,6 +8,11 @@ TELEGRAM_API_URL = "https://api.telegram.org/bot" + os.getenv("TELEGRAM_BOT_TOKE
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 TWITTER_HANDLE = os.getenv("TWITTER_HANDLE")
 
+# بررسی متغیر TWITTER_HANDLE
+if not TWITTER_HANDLE:
+    print("خطا: نام کاربری توییتر به درستی تنظیم نشده است.")
+    exit(1)
+
 # تابع برای ارسال پیام به تلگرام
 def send_to_telegram(message):
     payload = {
