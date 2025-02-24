@@ -1,2 +1,5 @@
-﻿snscrape
-requests
+Flask==2.0.1
+requests==2.26.0
+snscrape==0.4.3
+atproto==0.0.59
+certifi==2020.12.5
