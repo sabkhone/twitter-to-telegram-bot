@@ -1,89 +1,36 @@
-import requests
-from flask import Flask, request, jsonify
-from atproto import Client, exceptions
 import os
-import certifi
+import snscrape.modules.twitter as sntwitter
+import requests
+from time import sleep
 
-app = Flask(__name__)
+# تنظیمات محیطی
+TELEGRAM_API_URL = "https://api.telegram.org/bot" + os.getenv("TELEGRAM_BOT_TOKEN") + "/sendMessage"
+CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+TWITTER_HANDLE = os.getenv("TWITTER_HANDLE")
 
-# تنظیمات از محیطی دریافت می‌شود
-BLUESKY_HANDLE = os.getenv("BLUESKY_HANDLE")
-BLUESKY_APP_PASSWORD = os.getenv("BLUESKY_APP_PASSWORD")
-WEBHOOK_AUTH_TOKEN = os.getenv("WEBHOOK_AUTH_TOKEN")  # توکن امنیتی دلخواه
-
-# تنظیم کلاینت BlueSky
-client = Client()
-
-def login_to_bluesky():
-    """لاگین به حساب BlueSky با مدیریت خطاها"""
+# تابع برای ارسال پیام به تلگرام
+def send_to_telegram(message):
+    payload = {
+        'chat_id': CHANNEL_ID,
+        'text': message
+    }
     try:
-        client.login(
-            identifier=BLUESKY_HANDLE,
-            password=BLUESKY_APP_PASSWORD
-        )
-        return True, "✅ لاگین موفقیت‌آمیز بود!"
-    except exceptions.LoginError as e:
-        return False, f"❌ خطای لاگین: {e}"
-    except Exception as e:
-        return False, f"❌ خطای ناشناخته: {e}"
+        response = requests.post(TELEGRAM_API_URL, data=payload)
+        response.raise_for_status()  # بررسی برای خطاهای HTTP
+    except requests.exceptions.RequestException as e:
+        print(f"خطا در ارسال پیام به تلگرام: {e}")
 
-@app.route("/status", methods=["GET"])
-def check_login_status():
-    """بررسی وضعیت اتصال به BlueSky"""
-    if client.session:
-        return jsonify({
-            "status": "connected",
-            "did": client.session.did,
-            "handle": client.session.handle
-        }), 200
-    return jsonify({"status": "not_connected"}), 401
+# تابع برای گرفتن آخرین پست‌های توییتر
+def fetch_twitter_posts():
+    tweets = sntwitter.TwitterUserScraper(TWITTER_HANDLE).get_items()
+    for tweet in tweets:
+        # ارسال متن توییت به تلگرام
+        message = f"🧵 جدید از {TWITTER_HANDLE}:\n\n{tweet.content}"
+        send_to_telegram(message)
+        sleep(10)  # صبر برای جلوگیری از ارسال بیش از حد سریع
 
-@app.route("/post", methods=["POST"])
-def send_post():
-    """ارسال پست جدید با احراز هویت"""
-    # بررسی توکن امنیتی
-    if request.headers.get("X-Auth-Token") != WEBHOOK_AUTH_TOKEN:
-        return jsonify({"error": "Unauthorized"}), 401
-    
-    data = request.json
-    if not data or "text" not in data:
-        return jsonify({"error": "متن پست الزامی است"}), 400
-    
-    text = data["text"]
-    try:
-        # ارسال پست
-        client.send_post(text=text)
-        return jsonify({"status": "پست ارسال شد!", "text": text}), 200
-    except exceptions.NetworkError as e:
-        return jsonify({"error": f"خطای شبکه: {e}"}), 500
-    except Exception as e:
-        return jsonify({"error": f"خطای ناشناخته: {e}"}), 500
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    """وب هوک برای پاسخ خودکار"""
-    if request.headers.get("X-Auth-Token") != WEBHOOK_AUTH_TOKEN:
-        return jsonify({"error": "Unauthorized"}), 401
-    
-    data = request.json
-    text = data.get("text", "")
-    
-    if not text:
-        return jsonify({"error": "متن پیام الزامی است"}), 400
-    
-    try:
-        client.send_post(text=f"🔵 پاسخ خودکار: {text}")
-        return jsonify({"status": "ok"}), 200
-    except exceptions.NetworkError as e:
-        return jsonify({"error": f"خطای شبکه: {e}"}), 500
-
+# اجرای تابع اسکراب توییتر به صورت منظم
 if __name__ == "__main__":
-    # لاگین اولیه
-    login_success, message = login_to_bluesky()
-    print(message)
-    
-    if login_success:
-        port = os.getenv("PORT", 5000)  # دریافت پورت از محیط (برای Render)
-        app.run(host="0.0.0.0", port=int(port))  # تنظیم پورت مناسب برای Render
-    else:
-        print("سرور راه‌اندازی نشد!")
+    while True:
+        fetch_twitter_posts()
+        sleep(60)  # هر یک دقیقه یک بار پست‌های جدید رو چک می‌کنه
