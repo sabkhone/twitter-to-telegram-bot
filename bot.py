@@ -1,37 +1,89 @@
-﻿import os
 import requests
-import snscrape.modules.twitter as sntwitter
-import time
+from flask import Flask, request, jsonify
+from atproto import Client, exceptions
+import os
+import certifi
 
-# دریافت اطلاعات از متغیرهای محیطی
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-TWITTER_USERNAME = os.getenv("TWITTER_USERNAME")
+app = Flask(__name__)
 
-# بررسی اینکه متغیرهای محیطی مقدار دارند
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID or not TWITTER_USERNAME:
-    raise ValueError("❌ لطفاً مقادیر متغیرهای محیطی را در Render تنظیم کنید!")
+# تنظیمات از محیطی دریافت می‌شود
+BLUESKY_HANDLE = os.getenv("BLUESKY_HANDLE")
+BLUESKY_APP_PASSWORD = os.getenv("BLUESKY_APP_PASSWORD")
+WEBHOOK_AUTH_TOKEN = os.getenv("WEBHOOK_AUTH_TOKEN")  # توکن امنیتی دلخواه
 
-def send_telegram_message(text):
-    """ارسال پیام به تلگرام"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": text}
-    requests.post(url, json=payload)
+# تنظیم کلاینت BlueSky
+client = Client()
 
-def get_latest_tweet(username):
-    """دریافت آخرین توییت یک کاربر"""
-    tweets = list(sntwitter.TwitterUserScraper(username).get_items())
-    return tweets[0].content if tweets else None
-
-# حلقه چک کردن توییت‌های جدید
-last_tweet = None
-while True:
+def login_to_bluesky():
+    """لاگین به حساب BlueSky با مدیریت خطاها"""
     try:
-        latest_tweet = get_latest_tweet(TWITTER_USERNAME)
-        if latest_tweet and latest_tweet != last_tweet:
-            send_telegram_message(f"📢 توییت جدید از @{TWITTER_USERNAME}:\n\n{latest_tweet}")
-            last_tweet = latest_tweet
+        client.login(
+            identifier=BLUESKY_HANDLE,
+            password=BLUESKY_APP_PASSWORD
+        )
+        return True, "✅ لاگین موفقیت‌آمیز بود!"
+    except exceptions.LoginError as e:
+        return False, f"❌ خطای لاگین: {e}"
     except Exception as e:
-        print(f"⚠️ خطا: {e}")
+        return False, f"❌ خطای ناشناخته: {e}"
+
+@app.route("/status", methods=["GET"])
+def check_login_status():
+    """بررسی وضعیت اتصال به BlueSky"""
+    if client.session:
+        return jsonify({
+            "status": "connected",
+            "did": client.session.did,
+            "handle": client.session.handle
+        }), 200
+    return jsonify({"status": "not_connected"}), 401
+
+@app.route("/post", methods=["POST"])
+def send_post():
+    """ارسال پست جدید با احراز هویت"""
+    # بررسی توکن امنیتی
+    if request.headers.get("X-Auth-Token") != WEBHOOK_AUTH_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
     
-    time.sleep(60)  # چک کردن هر 60 ثانیه
+    data = request.json
+    if not data or "text" not in data:
+        return jsonify({"error": "متن پست الزامی است"}), 400
+    
+    text = data["text"]
+    try:
+        # ارسال پست
+        client.send_post(text=text)
+        return jsonify({"status": "پست ارسال شد!", "text": text}), 200
+    except exceptions.NetworkError as e:
+        return jsonify({"error": f"خطای شبکه: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"خطای ناشناخته: {e}"}), 500
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    """وب هوک برای پاسخ خودکار"""
+    if request.headers.get("X-Auth-Token") != WEBHOOK_AUTH_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.json
+    text = data.get("text", "")
+    
+    if not text:
+        return jsonify({"error": "متن پیام الزامی است"}), 400
+    
+    try:
+        client.send_post(text=f"🔵 پاسخ خودکار: {text}")
+        return jsonify({"status": "ok"}), 200
+    except exceptions.NetworkError as e:
+        return jsonify({"error": f"خطای شبکه: {e}"}), 500
+
+if __name__ == "__main__":
+    # لاگین اولیه
+    login_success, message = login_to_bluesky()
+    print(message)
+    
+    if login_success:
+        port = os.getenv("PORT", 5000)  # دریافت پورت از محیط (برای Render)
+        app.run(host="0.0.0.0", port=int(port))  # تنظیم پورت مناسب برای Render
+    else:
+        print("سرور راه‌اندازی نشد!")
